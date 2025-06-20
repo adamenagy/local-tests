@@ -1,0 +1,194 @@
+<html lang="en">
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8" />
+
+  <!-- The Viewer CSS -->
+  <link rel="stylesheet" href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.108.1/style.min.css"
+    type="text/css" />
+
+  <!-- Developer CSS -->
+  <style>
+    body {
+      margin: 0;
+      position: relative;
+    }
+
+    #MyConytainerDiv {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    #MyViewerDiv {
+      width: 100%;
+      height: calc(100% - 30px);
+      margin: 0;
+      position: relative;
+    }
+  </style>
+
+  <title>Showing Fusion Team Shared models</title>
+</head>
+
+<body>
+  <!-- The Viewer will be instantiated here -->
+  <div id="MyConytainerDiv">
+    <select id="rotation">
+      <option value="0">No Rotation</option>
+      <option value="90">Rotate 90 degrees</option>
+      <option value="180">Rotate 180 degrees</option>
+      <option value="270">Rotate 270 degrees</option>
+    </select>
+    <input type="checkbox" id="isPDF" checked>Load as PDF (instead of Leaflet)</input>
+    <button id="loadModel" onclick="loadModel()">Load Model</button>
+    <button id="drawMarkup" onclick="drawMarkup()">Draw Markup</button>
+    <button id="storeMarkup" onclick="storeMarkup()">Store Markup</button>
+    <button id="loadMarkup" onclick="loadMarkup()">Load Markup</button>
+    <div id="MyViewerDiv"></div>
+  </div>
+
+  <!-- The Viewer JS -->
+  <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.108.1/viewer3D.js"></script>
+
+  <!-- Developer JS -->
+  <script>
+    // this is the iframe URL that shows up when sharing a model embed on a page
+    const embedURLfromFusion =
+      "https://autodesk3743.autodesk360.com/shares/public/SH286ddQT78850c0d8a44e02cb44e85fcec1?mode=embed"; // scissors.pdf
+    // Fusion Team does not translate PDFs so you need to kick off translation explicitly using MD API  
+    let viewer;
+
+    async function getURN(callback) {
+      const ret = await fetch(
+        embedURLfromFusion
+          .replace("public", "metadata")
+          .replace("mode=embed", "")
+      );
+      const metadata = await ret.json();
+      const urn = btoa(metadata.success.body.urn)
+        .replace("/", "_")
+        .replace("=", "");
+
+      callback(urn);
+    }
+
+    async function getToken(callback) {
+      const ret = await fetch(
+        embedURLfromFusion
+          .replace("public", "sign")
+          .replace("mode=embed", "oauth2=true"),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        }
+      );
+      const oauth = await ret.json();
+
+      callback(oauth.accessToken, oauth.validitySeconds);
+    }
+
+    function loadModel() {
+      if (viewer) {
+        viewer.finish();
+      }
+
+      window.LMV_RASTER_PDF = !document.getElementById("isPDF").checked;
+
+      getURN(function (urn) {
+        const options = {
+          env: "AutodeskProduction2",
+          api: "derivativeV2",
+          getAccessToken: getToken,
+        };
+        const documentId = "urn:" + urn;
+        Autodesk.Viewing.Initializer(options, function onInitialized() {
+          Autodesk.Viewing.Document.load(documentId, onDocumentLoadSuccess);
+        });
+      });
+    }
+
+    function getRotation() {
+      const rotation = document.getElementById("rotation").value;
+      switch (rotation) {
+        case "90":
+          return Math.PI / 2;
+        case "180":
+          return Math.PI;
+        case "270":
+          return (3 * Math.PI) / 2;
+        default:
+          return 0;
+      }
+    }
+
+    function getPlacementTransform() {
+      const placementTransform = new THREE.Matrix4();
+      placementTransform.makeRotationZ(getRotation());
+      
+      return placementTransform;
+    }
+
+    /**
+     * Autodesk.Viewing.Document.load() success callback.
+     * Proceeds with model initialization.
+     */
+    async function onDocumentLoadSuccess(doc) {
+      // A document contains references to 3D and 2D viewables.
+      const viewable = doc.getRoot().getDefaultGeometry();
+
+      const viewerDiv = document.getElementById("MyViewerDiv");
+      viewer = new Autodesk.Viewing.GuiViewer3D(viewerDiv, {
+        extensions: ["Autodesk.DocumentBrowser"],
+      });
+      viewer.start();
+
+      viewer.loadDocumentNode(doc, viewable, { placementTransform: getPlacementTransform()});
+    }
+
+    let markupsData = null;
+    let viewerState = null;
+    let isPDF = false;
+    async function drawMarkup() {
+      let markupExtension = await NOP_VIEWER.loadExtension('Autodesk.Viewing.MarkupsCore')
+      markupExtension.enterEditMode();
+      var arrow = new Autodesk.Viewing.Extensions.Markups.Core.EditModeArrow(markupExtension)
+      markupExtension.changeEditMode(arrow)
+    }
+
+    async function storeMarkup() {
+      let markupExtension = await NOP_VIEWER.loadExtension('Autodesk.Viewing.MarkupsCore')
+      markupsData = markupExtension.generateData();
+      viewerState = viewer.getState();
+      isPDF = !window.LMV_RASTER_PDF;
+      markupExtension.leaveEditMode();
+      markupExtension.hide();
+    }
+
+    async function loadMarkup() {
+      let markupExtension = await NOP_VIEWER.loadExtension('Autodesk.Viewing.MarkupsCore');
+      markupExtension.show();
+      markupExtension.loadMarkups(markupsData, "layerName");
+
+      if (NOP_VIEWER.model.loader.isPdfLoader && !isPDF) {
+        let origin = Autodesk.Viewing.PDFUtils.leafletToPdfWorld(NOP_VIEWER, new THREE.Vector3(0,0,0))
+        let one = Autodesk.Viewing.PDFUtils.leafletToPdfWorld(NOP_VIEWER, new THREE.Vector3(1,1,1))
+        let svg = markupExtension.svg
+        svg.firstChild.setAttribute("transform", `translate(${origin.x}, ${origin.y})  scale(${one.x - origin.x}, ${one.y - origin.y})`)
+      } else if (NOP_VIEWER.model.loader.isLeafletLoader && isPDF) { 
+        let origin = Autodesk.Viewing.PDFUtils.leafletToPdfWorld(NOP_VIEWER, new THREE.Vector3(0,0,0))
+        let one = Autodesk.Viewing.PDFUtils.leafletToPdfWorld(NOP_VIEWER, new THREE.Vector3(1,1,1))
+        let svg = markupExtension.svg
+
+        const rotation = document.getElementById("rotation").value;
+        svg.firstChild.setAttribute("transform", `rotate(${rotation}) scale(${1 / (one.x - origin.x)}, ${1 / (one.y - origin.y)}) translate(${-origin.x}, ${-origin.y}) rotate(-${rotation})`)
+      }
+    }
+  </script>
+</body>
+
+</html>

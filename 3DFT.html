@@ -1,0 +1,125 @@
+<html lang="en">
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8" />
+
+  <!-- The Viewer CSS -->
+  <link rel="stylesheet" href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css"
+    type="text/css" />
+
+  <!-- Developer CSS -->
+  <style>
+    body {
+      margin: 0;
+      position: relative;
+    }
+
+    #MyConytainerDiv {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    #MyViewerDiv {
+      width: 100%;
+      height: calc(100% - 30px);
+      margin: 0;
+      position: relative;
+    }
+  </style>
+
+  <title>Showing Fusion Team Shared models</title>
+</head>
+
+<body>
+  <!-- The Viewer will be instantiated here -->
+  <div id="MyConytainerDiv">
+    <div id="MyViewerDiv"></div>
+  </div>
+
+  <!-- The Viewer JS -->
+  <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.js"></script>
+
+  <!-- Developer JS -->
+  <script>
+    // this is the iframe URL that shows up when sharing a model embed on a page
+    const embedURLfromFusion =
+      "https://autodesk3743.autodesk360.com/shares/public/SH286ddQT78850c0d8a41ee995a74435bd3e?mode=embed"; // Snowdon... .rvt
+    const embedURLfromFusion2 =
+      "https://autodesk3743.autodesk360.com/shares/public/SH286ddQT78850c0d8a4908f0cbf809aaaf9?mode=embed"; // Plant... .rvt
+    // Fusion Team does not translate PDFs so you need to kick off translation explicitly using MD API  
+    let viewer;
+
+    function getURN(url) {
+      return new Promise(async resolve => {
+        const ret = await fetch(
+          url
+            .replace("public", "metadata")
+            .replace("mode=embed", "")
+        );
+        const metadata = await ret.json();
+        const urn = btoa(metadata.success.body.urn)
+          .replace("/", "_")
+          .replace("=", "");
+
+        resolve(urn);
+      });
+    }
+
+    async function getToken(callback) {
+      const ret = await fetch(
+        embedURLfromFusion
+          .replace("public", "sign")
+          .replace("mode=embed", "oauth2=true"),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        }
+      );
+      const oauth = await ret.json();
+
+      callback(oauth.accessToken, oauth.validitySeconds);
+    }
+
+    function loadModel() {
+      const options = {
+        env: "AutodeskProduction2",
+        api: "derivativeV2",
+        getAccessToken: getToken,
+      };
+
+      Autodesk.Viewing.Initializer(options, async function onInitialized() {
+        const viewerDiv = document.getElementById("MyViewerDiv");
+        viewer = new Autodesk.Viewing.GuiViewer3D(viewerDiv, {
+          extensions: ["Autodesk.DocumentBrowser"],
+        });
+        viewer.start();
+
+        let urn1 = await getURN(embedURLfromFusion);
+        let urn2 = await getURN(embedURLfromFusion2);
+
+        Autodesk.Viewing.Document.load(`urn:${urn1}`, onDocumentLoadSuccess, {keepCurrentModels: true});
+        Autodesk.Viewing.Document.load(`urn:${urn2}`, onDocumentLoadSuccess, {keepCurrentModels: true});
+      });
+    }
+
+    /**
+     * Autodesk.Viewing.Document.load() success callback.
+     * Proceeds with model initialization.
+     */
+    async function onDocumentLoadSuccess(doc) {
+      // A document contains references to 3D and 2D viewables.
+      const viewable = doc.getRoot().getDefaultGeometry();
+
+      viewer.loadDocumentNode(doc, viewable);
+    }
+
+    loadModel();
+  </script>
+</body>
+
+</html>
